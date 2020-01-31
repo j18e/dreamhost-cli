@@ -10,23 +10,21 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net"
 	"net/http"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 )
 
 const (
-	usage         = `Usage: dreamdns-update --token=<token> <record>`
 	DREAMHOST_API = "https://api.dreamhost.com"
-	WHATSMYIP_API = "http://myexternalip.com/raw"
+	WHATSMYIP_API = "https://myexternalip.com/raw"
 )
 
-var httpCli = http.Client{Timeout: time.Second * 5}
-
 func main() {
-	apiKey := flag.String("api.key", "", "dreamhost api key with dns rw permissions")
-	dnsRecord := flag.String("dns.record", "", "dns A record to check/create/modify")
+	apiKey := flag.String("api.key", "", "Dreamhost API token with permissions to change DNS records")
+	dnsRecord := flag.String("dns.record", "", "DNS A record to update with our external IP")
 	flag.Parse()
 
 	if *apiKey == "" {
@@ -36,13 +34,20 @@ func main() {
 		log.Fatal("required flag -dns.record")
 	}
 
-	ip, err := getExternalIP(WHATSMYIP_API)
+	cli := Client{
+		Client:        http.Client{Timeout: 5 * time.Second},
+		dreamhostAddr: DREAMHOST_API,
+		dreamhostTok:  *apiKey,
+		extIPAddr:     WHATSMYIP_API,
+	}
+
+	ip, err := cli.ExtIP()
 	if err != nil {
 		log.Fatalf("checking our public IP address: %v", err)
 	}
-	fmt.Printf("our current public IP address: %s\n", ip)
+	log.Infof("our current public IP address: %s", ip)
 
-	records, err := getRecords(*apiKey)
+	records, err := cli.Records()
 	if err != nil {
 		log.Fatalf("getting dns records from dreamhost: %v", err)
 	}
@@ -60,22 +65,21 @@ func main() {
 
 	// do nothing if record matches our public ip
 	if match.Value == ip {
-		fmt.Println("found record pointing at our public IP address. Exiting...")
+		log.Info("found record pointing at our public IP address. Exiting...")
 		return
 	}
 
 	// record does not match, must remove
-	fmt.Printf("removing record %s->%s...\n", match.Record, match.Value)
-	if err := removeRecord(*apiKey, match.Record, match.Value); err != nil {
+	log.Infof("removing record %s->%s...", match.Record, match.Value)
+	if err := cli.Delete(match.Record, match.Value); err != nil {
 		log.Fatalf("failed: %v", err)
 	}
-	fmt.Println("success")
 
-	fmt.Printf("adding record %s->%s...\n", *dnsRecord, ip)
-	if err := addRecord(*apiKey, *dnsRecord, ip); err != nil {
+	log.Infof("record removed. Creating record %s->%s...", *dnsRecord, ip)
+	if err := cli.Create(*dnsRecord, ip); err != nil {
 		log.Fatalf("creating A record %s->%s: %v", *dnsRecord, ip, err)
 	}
-	fmt.Println("success")
+	log.Info("record created")
 }
 
 type Record struct {
@@ -89,93 +93,101 @@ type Result struct {
 	Data   string `json:"data"`
 }
 
-func addRecord(token string, record string, address string) error {
+type Client struct {
+	http.Client
+	dreamhostAddr string
+	dreamhostTok  string
+	extIPAddr     string
+}
+
+func (c Client) Create(record string, address string) error {
 	const url = "%s?format=json&cmd=dns-add_record&key=%s&type=A&record=%s&value=%s"
-	var r Result
 
-	resp, err := httpCli.Get(fmt.Sprintf(url, DREAMHOST_API, token, record, address))
+	res, err := c.Get(fmt.Sprintf(url, c.dreamhostAddr, c.dreamhostTok, record, address))
 	if err != nil {
 		return fmt.Errorf("contacting api: %w", err)
 	}
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("reading response: %w", err)
-	}
-	if err = json.Unmarshal(body, &r); err != nil {
+	defer res.Body.Close()
+
+	var r Result
+	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
 		return fmt.Errorf("unmarshaling response: %w", err)
 	}
+
 	if r.Result != "success" {
-		return fmt.Errorf("record creation failed: %v", r.Data)
+		return fmt.Errorf("record creation failed with %s: %s", r.Result, r.Data)
 	}
 
 	return nil
 }
 
-func removeRecord(token string, record string, address string) error {
-	const url = "%s?format=json&cmd=dns-remove_record&key=%s&type=A&record=%s&value=%s"
-	var r Result
+func (c Client) Delete(record string, address string) error {
+	url := fmt.Sprintf("%s?format=json&cmd=dns-remove_record&key=%s&type=A&record=%s&value=%s",
+		c.dreamhostAddr, c.dreamhostTok, record, address)
 
-	resp, err := httpCli.Get(fmt.Sprintf(url, DREAMHOST_API, token, record, address))
+	res, err := c.Get(url)
 	if err != nil {
 		return fmt.Errorf("contacting api: %w", err)
 	}
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("reading response: %w", err)
-	}
-	if err = json.Unmarshal(body, &r); err != nil {
+	defer res.Body.Close()
+
+	var r Result
+	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
 		return fmt.Errorf("unmarshaling response: %w", err)
 	}
+
 	if r.Result != "success" {
-		return fmt.Errorf("record removal failed: %s", r.Data)
+		return fmt.Errorf("record removal failed with %s: %s", r.Result, r.Data)
 	}
 	return nil
 }
 
-func getRecords(token string) ([]*Record, error) {
+func (c Client) Records() ([]*Record, error) {
 	var r struct {
-		Data   []*Record `json:"data"`
-		Result string    `json:"result"`
-		Reason string    `json:"reason"`
+		Data   json.RawMessage `json:"data"`
+		Result string          `json:"result"`
+		Reason string          `json:"reason"`
 	}
-	url := fmt.Sprintf("%s?format=json&cmd=dns-list_records&key=%s", DREAMHOST_API, token)
+	url := fmt.Sprintf("%s?format=json&cmd=dns-list_records&key=%s", c.dreamhostAddr, c.dreamhostTok)
 
-	resp, err := httpCli.Get(url)
+	res, err := c.Get(url)
 	if err != nil {
-		return r.Data, err
+		return nil, err
 	}
+	defer res.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return r.Data, err
-	}
-
-	if err := json.Unmarshal(body, &r); err != nil {
-		return nil, fmt.Errorf("unmarshaling response: %w", err)
+	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
+		return nil, fmt.Errorf("unmarshaling json: %w", err)
 	}
 
 	if r.Result != "success" {
-		return r.Data, errors.New(r.Reason)
+		return nil, errors.New(r.Reason)
 	}
 
-	return r.Data, nil
+	var records []*Record
+	if err := json.Unmarshal(r.Data, &records); err != nil {
+		return nil, fmt.Errorf("unmarshalling json records: %w", err)
+	}
+
+	return records, nil
 }
 
-func getExternalIP(apiAddr string) (string, error) {
-	resp, err := httpCli.Get(apiAddr)
+func (c Client) ExtIP() (string, error) {
+	res, err := c.Get(c.extIPAddr)
 	if err != nil {
-		return "", fmt.Errorf("contacting api: %w", err)
+		return "", fmt.Errorf("contacting my-external-ip api: %w", err)
 	}
+	defer res.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	bs, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		return "", fmt.Errorf("reading response: %w", err)
 	}
-	ip := string(body)
 
-	if a := net.ParseIP(ip).To4(); a == nil {
-		return "", fmt.Errorf("invalid ip address: %v", a)
+	ip := net.ParseIP(string(bs))
+	if ip == nil {
+		return "", fmt.Errorf("invalid ip address: %s", ip)
 	}
 
-	return ip, nil
+	return ip.String(), nil
 }
