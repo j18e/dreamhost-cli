@@ -71,32 +71,30 @@ func (c Client) Run(record string) error {
 
 	var match *Record
 	for _, r := range records {
-		if (r.Type == "A") && (r.Record == record) {
+		if r.Type == "A" && r.Record == record {
 			match = r
 			break
 		}
 	}
-	if match == nil {
-		return fmt.Errorf("no A records matching %s. Exiting...", record)
-	}
 
 	// do nothing if record matches our public ip
 	if match.Value == ip {
-		log.Info("found record pointing at our public IP address. Exiting...")
+		log.Infof("nothing to do: record already points at our public IP %s", ip)
 		return nil
 	}
 
-	// record does not match, must remove
-	log.Infof("deleting record %s->%s...", match.Record, match.Value)
-	if err := c.Delete(match.Record, match.Value); err != nil {
-		return fmt.Errorf("failed deleting record %s: %w", record, err)
+	if match != nil {
+		// record does not match, must remove
+		log.Infof("deleting record %s->%s", match.Record, match.Value)
+		if err := c.Delete(match.Record, match.Value); err != nil {
+			return fmt.Errorf("failed deleting record %s: %w", record, err)
+		}
 	}
 
-	log.Infof("record removed. Creating record %s->%s...", record, ip)
+	log.Infof("creating record %s->%s", record, ip)
 	if err := c.Create(record, ip); err != nil {
 		return fmt.Errorf("failed creating A record %s->%s: %w", record, ip, err)
 	}
-	log.Info("record created")
 	return nil
 }
 
