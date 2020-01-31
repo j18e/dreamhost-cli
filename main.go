@@ -25,6 +25,7 @@ const (
 func main() {
 	apiKey := flag.String("api.key", "", "Dreamhost API token with permissions to change DNS records")
 	dnsRecord := flag.String("dns.record", "", "DNS A record to update with our external IP")
+	syncInterval := flag.Duration("sync.interval", 0, "frequency of DNS update (runs just once if left unset)")
 	flag.Parse()
 
 	if *apiKey == "" {
@@ -41,45 +42,62 @@ func main() {
 		extIPAddr:     WHATSMYIP_API,
 	}
 
-	ip, err := cli.ExtIP()
+	if err := cli.Run(*dnsRecord); err != nil {
+		log.Fatal(err)
+	}
+
+	if *syncInterval == 0 {
+		return
+	}
+
+	for range time.NewTicker(*syncInterval).C {
+		if err := cli.Run(*dnsRecord); err != nil {
+			log.Error(err)
+		}
+	}
+}
+
+func (c Client) Run(record string) error {
+	ip, err := c.ExtIP()
 	if err != nil {
-		log.Fatalf("checking our public IP address: %v", err)
+		return fmt.Errorf("checking our public IP address: %w", err)
 	}
 	log.Infof("our current public IP address: %s", ip)
 
-	records, err := cli.Records()
+	records, err := c.Records()
 	if err != nil {
-		log.Fatalf("getting dns records from dreamhost: %v", err)
+		return fmt.Errorf("getting dns records from dreamhost: %w", err)
 	}
 
 	var match *Record
 	for _, r := range records {
-		if (r.Type == "A") && (r.Record == *dnsRecord) {
+		if (r.Type == "A") && (r.Record == record) {
 			match = r
 			break
 		}
 	}
 	if match == nil {
-		log.Fatalf("no A records matching %s. Exiting...", *dnsRecord)
+		return fmt.Errorf("no A records matching %s. Exiting...", record)
 	}
 
 	// do nothing if record matches our public ip
 	if match.Value == ip {
 		log.Info("found record pointing at our public IP address. Exiting...")
-		return
+		return nil
 	}
 
 	// record does not match, must remove
-	log.Infof("removing record %s->%s...", match.Record, match.Value)
-	if err := cli.Delete(match.Record, match.Value); err != nil {
-		log.Fatalf("failed: %v", err)
+	log.Infof("deleting record %s->%s...", match.Record, match.Value)
+	if err := c.Delete(match.Record, match.Value); err != nil {
+		return fmt.Errorf("failed deleting record %s: %w", record, err)
 	}
 
-	log.Infof("record removed. Creating record %s->%s...", *dnsRecord, ip)
-	if err := cli.Create(*dnsRecord, ip); err != nil {
-		log.Fatalf("creating A record %s->%s: %v", *dnsRecord, ip, err)
+	log.Infof("record removed. Creating record %s->%s...", record, ip)
+	if err := c.Create(record, ip); err != nil {
+		return fmt.Errorf("failed creating A record %s->%s: %w", record, ip, err)
 	}
 	log.Info("record created")
+	return nil
 }
 
 type Record struct {
