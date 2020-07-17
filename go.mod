@@ -1,4 +1,4 @@
-module github.com/j18e/dreamdns-update
+module github.com/j18e/dreamhost-cli
 
 go 1.13
 

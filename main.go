@@ -12,6 +12,7 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -25,7 +26,7 @@ const (
 func main() {
 	apiKey := flag.String("api.key", "", "Dreamhost API token with permissions to change DNS records")
 	dnsRecord := flag.String("dns.record", "", "DNS A record to update with our external IP")
-	syncInterval := flag.Duration("sync.interval", 0, "frequency of DNS update (runs just once if left unset)")
+	syncInterval := flag.Duration("sync.interval", 0, "frequency of DNS update eg: 15m (runs just once if left unset or 0)")
 	flag.Parse()
 
 	if *apiKey == "" {
@@ -36,10 +37,8 @@ func main() {
 	}
 
 	cli := Client{
-		Client:        http.Client{Timeout: 5 * time.Second},
-		dreamhostAddr: DREAMHOST_API,
-		dreamhostTok:  *apiKey,
-		extIPAddr:     WHATSMYIP_API,
+		Client:       http.Client{Timeout: 5 * time.Second},
+		dreamhostTok: *apiKey,
 	}
 
 	if err := cli.Run(*dnsRecord); err != nil {
@@ -47,7 +46,8 @@ func main() {
 	}
 
 	if *syncInterval == 0 {
-		return
+		log.Info("finished")
+		os.Exit(0)
 	}
 
 	for range time.NewTicker(*syncInterval).C {
@@ -111,15 +111,13 @@ type Result struct {
 
 type Client struct {
 	http.Client
-	dreamhostAddr string
-	dreamhostTok  string
-	extIPAddr     string
+	dreamhostTok string
 }
 
 func (c Client) Create(record string, address string) error {
 	const url = "%s?format=json&cmd=dns-add_record&key=%s&type=A&record=%s&value=%s"
 
-	res, err := c.Get(fmt.Sprintf(url, c.dreamhostAddr, c.dreamhostTok, record, address))
+	res, err := c.Get(fmt.Sprintf(url, DREAMHOST_API, c.dreamhostTok, record, address))
 	if err != nil {
 		return fmt.Errorf("contacting api: %w", err)
 	}
@@ -139,7 +137,7 @@ func (c Client) Create(record string, address string) error {
 
 func (c Client) Delete(record string, address string) error {
 	url := fmt.Sprintf("%s?format=json&cmd=dns-remove_record&key=%s&type=A&record=%s&value=%s",
-		c.dreamhostAddr, c.dreamhostTok, record, address)
+		DREAMHOST_API, c.dreamhostTok, record, address)
 
 	res, err := c.Get(url)
 	if err != nil {
@@ -164,7 +162,7 @@ func (c Client) Records() ([]*Record, error) {
 		Result string          `json:"result"`
 		Reason string          `json:"reason"`
 	}
-	url := fmt.Sprintf("%s?format=json&cmd=dns-list_records&key=%s", c.dreamhostAddr, c.dreamhostTok)
+	url := fmt.Sprintf("%s?format=json&cmd=dns-list_records&key=%s", DREAMHOST_API, c.dreamhostTok)
 
 	res, err := c.Get(url)
 	if err != nil {
@@ -189,7 +187,7 @@ func (c Client) Records() ([]*Record, error) {
 }
 
 func (c Client) ExtIP() (string, error) {
-	res, err := c.Get(c.extIPAddr)
+	res, err := c.Get(WHATSMYIP_API)
 	if err != nil {
 		return "", fmt.Errorf("contacting my-external-ip api: %w", err)
 	}
