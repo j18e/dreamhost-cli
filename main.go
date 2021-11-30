@@ -42,8 +42,8 @@ func main() {
 
 	cli := Client{
 		Client:       http.Client{Timeout: 5 * time.Second},
-		dreamhostTok: *apiKey,
-		dryRun:       *dryRun,
+		DreamhostTok: *apiKey,
+		DryRun:       *dryRun,
 	}
 
 	if *syncInterval != 0 {
@@ -67,8 +67,9 @@ func main() {
 
 type Client struct {
 	http.Client
-	dreamhostTok string
-	dryRun       bool
+
+	DreamhostTok string
+	DryRun       bool
 }
 
 func (c Client) Run(record string) error {
@@ -123,15 +124,16 @@ type Result struct {
 	Data   string `json:"data"`
 }
 
+// Create creates an A record pointing at the given address.
 func (c Client) Create(record string, address string) error {
 	const url = "%s?format=json&cmd=dns-add_record&key=%s&type=A&record=%s&value=%s"
 
-	if c.dryRun {
+	if c.DryRun {
 		log.Infof("dry-run: create A record %s -> %s", record, address)
 		return nil
 	}
 
-	res, err := c.Get(fmt.Sprintf(url, DreamhostAPI, c.dreamhostTok, record, address))
+	res, err := c.Get(fmt.Sprintf(url, DreamhostAPI, c.DreamhostTok, record, address))
 	if err != nil {
 		return fmt.Errorf("contacting api: %w", err)
 	}
@@ -149,11 +151,12 @@ func (c Client) Create(record string, address string) error {
 	return nil
 }
 
+// Create deletes an A record for the given address.
 func (c Client) Delete(record string, address string) error {
 	url := fmt.Sprintf("%s?format=json&cmd=dns-remove_record&key=%s&type=A&record=%s&value=%s",
-		DreamhostAPI, c.dreamhostTok, record, address)
+		DreamhostAPI, c.DreamhostTok, record, address)
 
-	if c.dryRun {
+	if c.DryRun {
 		log.Infof("dry-run: delete A record %s -> %s", record, address)
 		return nil
 	}
@@ -175,13 +178,14 @@ func (c Client) Delete(record string, address string) error {
 	return nil
 }
 
+// Records fetches the DNS records configured on the Dreamhost account.
 func (c Client) Records() ([]*Record, error) {
 	var r struct {
 		Data   json.RawMessage `json:"data"`
 		Result string          `json:"result"`
 		Reason string          `json:"reason"`
 	}
-	url := fmt.Sprintf("%s?format=json&cmd=dns-list_records&key=%s", DreamhostAPI, c.dreamhostTok)
+	url := fmt.Sprintf("%s?format=json&cmd=dns-list_records&key=%s", DreamhostAPI, c.DreamhostTok)
 
 	res, err := c.Get(url)
 	if err != nil {
@@ -205,6 +209,7 @@ func (c Client) Records() ([]*Record, error) {
 	return records, nil
 }
 
+// ExtIP finds the public IP address of the network this script is running on.
 func (c Client) ExtIP() (string, error) {
 	res, err := c.Get(WhatsmyipAPI)
 	if err != nil {
