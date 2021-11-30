@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	DREAMHOST_API = "https://api.dreamhost.com"
-	WHATSMYIP_API = "https://myexternalip.com/raw"
+	DreamhostAPI = "https://api.dreamhost.com"
+	WhatsmyipAPI = "https://myexternalip.com/raw"
 )
 
 func main() {
@@ -117,7 +117,7 @@ type Client struct {
 func (c Client) Create(record string, address string) error {
 	const url = "%s?format=json&cmd=dns-add_record&key=%s&type=A&record=%s&value=%s"
 
-	res, err := c.Get(fmt.Sprintf(url, DREAMHOST_API, c.dreamhostTok, record, address))
+	res, err := c.Get(fmt.Sprintf(url, DreamhostAPI, c.dreamhostTok, record, address))
 	if err != nil {
 		return fmt.Errorf("contacting api: %w", err)
 	}
@@ -137,7 +137,7 @@ func (c Client) Create(record string, address string) error {
 
 func (c Client) Delete(record string, address string) error {
 	url := fmt.Sprintf("%s?format=json&cmd=dns-remove_record&key=%s&type=A&record=%s&value=%s",
-		DREAMHOST_API, c.dreamhostTok, record, address)
+		DreamhostAPI, c.dreamhostTok, record, address)
 
 	res, err := c.Get(url)
 	if err != nil {
@@ -162,7 +162,7 @@ func (c Client) Records() ([]*Record, error) {
 		Result string          `json:"result"`
 		Reason string          `json:"reason"`
 	}
-	url := fmt.Sprintf("%s?format=json&cmd=dns-list_records&key=%s", DREAMHOST_API, c.dreamhostTok)
+	url := fmt.Sprintf("%s?format=json&cmd=dns-list_records&key=%s", DreamhostAPI, c.dreamhostTok)
 
 	res, err := c.Get(url)
 	if err != nil {
@@ -187,7 +187,7 @@ func (c Client) Records() ([]*Record, error) {
 }
 
 func (c Client) ExtIP() (string, error) {
-	res, err := c.Get(WHATSMYIP_API)
+	res, err := c.Get(WhatsmyipAPI)
 	if err != nil {
 		return "", fmt.Errorf("contacting my-external-ip api: %w", err)
 	}
