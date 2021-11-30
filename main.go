@@ -27,6 +27,7 @@ func main() {
 	apiKey := flag.String("api.key", "", "Dreamhost API token with permissions to change DNS records")
 	dnsRecord := flag.String("dns.record", "", "DNS A record to update with our external IP")
 	syncInterval := flag.Duration("sync.interval", 0, "frequency of DNS update eg: 15m (runs just once if left unset or 0)")
+	dryRun := flag.Bool("dry-run", false, "don't actually change DNS records, just print the changes that would occur")
 	flag.Parse()
 
 	if *apiKey == "" {
@@ -35,12 +36,19 @@ func main() {
 	if *dnsRecord == "" {
 		log.Fatal("required flag -dns.record")
 	}
+	if *syncInterval < 0 {
+		log.Fatal("sync.interval must be >= 0")
+	}
 
 	cli := Client{
 		Client:       http.Client{Timeout: 5 * time.Second},
 		dreamhostTok: *apiKey,
+		dryRun:       *dryRun,
 	}
 
+	if *syncInterval != 0 {
+		log.Infof("running sync every %s", *syncInterval)
+	}
 	if err := cli.Run(*dnsRecord); err != nil {
 		log.Fatal(err)
 	}
@@ -55,6 +63,12 @@ func main() {
 			log.Error(err)
 		}
 	}
+}
+
+type Client struct {
+	http.Client
+	dreamhostTok string
+	dryRun       bool
 }
 
 func (c Client) Run(record string) error {
@@ -77,23 +91,23 @@ func (c Client) Run(record string) error {
 		}
 	}
 
-	// do nothing if record matches our public ip
-	if match.Value == ip {
-		log.Infof("nothing to do: record already points at our public IP %s", ip)
-		return nil
-	}
-
 	if match != nil {
+		// do nothing if record matches our public ip
+		if match.Value == ip {
+			log.Infof("nothing to do: record already points at our public IP %s", ip)
+			return nil
+		}
+
 		// record does not match, must remove
-		log.Infof("deleting record %s->%s", match.Record, match.Value)
+		log.Infof("deleting record %s -> %s", match.Record, match.Value)
 		if err := c.Delete(match.Record, match.Value); err != nil {
-			return fmt.Errorf("failed deleting record %s: %w", record, err)
+			return fmt.Errorf("deleting A record %s: %w", record, err)
 		}
 	}
 
-	log.Infof("creating record %s->%s", record, ip)
+	log.Infof("creating record %s -> %s", record, ip)
 	if err := c.Create(record, ip); err != nil {
-		return fmt.Errorf("failed creating A record %s->%s: %w", record, ip, err)
+		return fmt.Errorf("creating A record %s -> %s: %w", record, ip, err)
 	}
 	return nil
 }
@@ -109,13 +123,13 @@ type Result struct {
 	Data   string `json:"data"`
 }
 
-type Client struct {
-	http.Client
-	dreamhostTok string
-}
-
 func (c Client) Create(record string, address string) error {
 	const url = "%s?format=json&cmd=dns-add_record&key=%s&type=A&record=%s&value=%s"
+
+	if c.dryRun {
+		log.Infof("dry-run: create A record %s -> %s", record, address)
+		return nil
+	}
 
 	res, err := c.Get(fmt.Sprintf(url, DreamhostAPI, c.dreamhostTok, record, address))
 	if err != nil {
@@ -138,6 +152,11 @@ func (c Client) Create(record string, address string) error {
 func (c Client) Delete(record string, address string) error {
 	url := fmt.Sprintf("%s?format=json&cmd=dns-remove_record&key=%s&type=A&record=%s&value=%s",
 		DreamhostAPI, c.dreamhostTok, record, address)
+
+	if c.dryRun {
+		log.Infof("dry-run: delete A record %s -> %s", record, address)
+		return nil
+	}
 
 	res, err := c.Get(url)
 	if err != nil {
