@@ -15,6 +15,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -22,6 +24,16 @@ const (
 	DreamhostAPI = "https://api.dreamhost.com"
 	WhatsmyipAPI = "https://myexternalip.com/raw"
 )
+
+var lastSuccessfulCheck = prometheus.NewGauge(prometheus.GaugeOpts{
+	Namespace: "dreamhostcli",
+	Name:      "last_successful_check",
+	Help:      "The last time the DNS record was checked without an error",
+})
+
+func init() {
+	prometheus.MustRegister(lastSuccessfulCheck)
+}
 
 func main() {
 	apiKey := flag.String("api.key", "", "Dreamhost API token with permissions to change DNS records")
@@ -47,10 +59,16 @@ func main() {
 	}
 
 	if *syncInterval != 0 {
+		http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprint(w, "server is alive!")
+		})
+		http.Handle("/metrics", promhttp.Handler())
 		log.Infof("running sync every %s", *syncInterval)
 	}
 	if err := cli.Run(*dnsRecord); err != nil {
 		log.Fatal(err)
+	} else {
+		lastSuccessfulCheck.Set(float64(time.Now().Unix()))
 	}
 
 	if *syncInterval == 0 {
@@ -58,9 +76,15 @@ func main() {
 		os.Exit(0)
 	}
 
+	go func() {
+		log.Fatal(http.ListenAndServe(":9000", nil))
+	}()
+
 	for range time.NewTicker(*syncInterval).C {
 		if err := cli.Run(*dnsRecord); err != nil {
 			log.Error(err)
+		} else {
+			lastSuccessfulCheck.Set(float64(time.Now().Unix()))
 		}
 	}
 }
