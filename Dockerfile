@@ -1,5 +1,20 @@
-FROM alpine:3.10
+FROM golang:1.17 AS builder
 
-COPY ./dreamhost-cli .
+ENV GOOS=linux
+ENV GOARCH=386
 
-ENTRYPOINT ./dreamhost-cli
+WORKDIR /work
+
+COPY go.mod .
+COPY go.sum .
+
+RUN go mod download
+
+COPY main.go .
+RUN go build -o ./dreamhost-cli
+
+FROM alpine:3.14
+
+COPY --from=builder /work/dreamhost-cli .
+
+ENTRYPOINT ["./dreamhost-cli"]

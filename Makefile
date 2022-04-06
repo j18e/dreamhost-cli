@@ -15,4 +15,6 @@ docker-push:
 	docker push $(IMAGE_FULL)
 	docker push $(IMAGE_NAME):latest
 
+docker: docker-build docker-push
+
 all: build docker-build docker-push
